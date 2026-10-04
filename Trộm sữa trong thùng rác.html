@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trộm sữa trong thùng rác</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:#0b5d1e;font-family:system-ui,sans-serif;color:#fff;overflow:hidden;touch-action:none}
+#wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:6px}
+canvas{width:100%;max-width:800px;aspect-ratio:8/5;background:#1fc13a;border-radius:12px;box-shadow:0 4px 20px #0006}
+#ui{display:flex;gap:10px;align-items:center;width:100%;max-width:800px;font-weight:700}
+#bar{flex:1;height:22px;background:#0006;border-radius:12px;overflow:hidden;border:2px solid #fff8}
+#fill{height:100%;width:0;background:linear-gradient(90deg,#ffe14d,#ff7a1a);transition:width .08s}
+#pad{display:grid;grid-template-columns:repeat(3,56px);grid-template-rows:repeat(2,56px);gap:6px}
+#pad button,#hold{border:0;border-radius:14px;background:#fff3;color:#fff;font-size:24px;font-weight:700;user-select:none;touch-action:none}
+#hold{width:130px;height:118px;font-size:18px;background:#ff7a1acc}
+#ctl{display:flex;gap:30px;align-items:center}
+#ov{position:fixed;inset:0;background:#000a;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:14px;padding:20px}
+#ov button{font-size:22px;padding:12px 28px;border:0;border-radius:14px;background:#ffd23f;font-weight:700}
+#ov h1{margin:0;font-size:34px}
+</style>
+</head>
+<body>
+<div id="wrap">
+<div id="ui"><span>🥛 Nội năng</span><div id="bar"><div id="fill"></div></div><span id="pct">0%</span></div>
+<canvas id="c" width="800" height="500"></canvas>
+<div id="ctl">
+<div id="pad"><span></span><button data-k="up">▲</button><span></span><button data-k="left">◀</button><button data-k="down">▼</button><button data-k="right">▶</button></div>
+<button id="hold">GIỮ<br>UỐNG SỮA</button>
+</div>
+</div>
+<div id="ov"><h1 id="t">🥛 Trộm sữa trong thùng rác</h1>
+<p id="d">Đi tới gần thùng rác, giữ <b>Space</b> (hoặc nút GIỮ) để uống sữa.<br>Chó thức dậy mà đang uống là thua! Thả ra thì nội năng tụt dần.<br>Di chuyển: mũi tên / WASD.</p>
+<button id="go">Bắt đầu</button></div>
+<script>
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+const fill=document.getElementById('fill'),pct=document.getElementById('pct'),ov=document.getElementById('ov');
+const keys={};let holdBtn=false;
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=1;if(e.code==='Space')e.preventDefault()});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=0});
+document.querySelectorAll('#pad button').forEach(b=>{
+ const k=b.dataset.k,on=e=>{e.preventDefault();keys['b'+k]=1},off=e=>{e.preventDefault();keys['b'+k]=0};
+ b.addEventListener('pointerdown',on);b.addEventListener('pointerup',off);b.addEventListener('pointerleave',off);b.addEventListener('pointercancel',off)});
+const hb=document.getElementById('hold');
+hb.addEventListener('pointerdown',e=>{e.preventDefault();holdBtn=true});
+['pointerup','pointerleave','pointercancel'].forEach(n=>hb.addEventListener(n,()=>holdBtn=false));
+
+/* ---- Âm thanh ---- */
+let ac,musicOn=false,step=0,timer;
+function tone(f,t,d,type='square',v=.06){if(!ac)return;const o=ac.createOscillator(),gn=ac.createGain();o.type=type;o.frequency.value=f;gn.gain.setValueAtTime(v,t);gn.gain.exponentialRampToValueAtTime(.0001,t+d);o.connect(gn).connect(ac.destination);o.start(t);o.stop(t+d)}
+const mel=[523,659,784,659,587,698,880,698,523,659,784,1047,988,784,659,587];
+const bas=[131,131,196,196,147,147,175,175];
+function music(){if(!musicOn)return;const t=ac.currentTime+.02;
+ tone(mel[step%16],t,.14,'square',.05);
+ if(step%2==0)tone(bas[(step/2)%8],t,.2,'triangle',.12);
+ if(step%4==2)tone(2000,t,.03,'square',.02);step++}
+function startMusic(){stopMusic();musicOn=true;step=0;timer=setInterval(music,170)}
+function stopMusic(){musicOn=false;clearInterval(timer)}
+function say(txt,lang,pitch,rate){try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(txt);u.lang=lang;u.pitch=pitch;u.rate=rate;speechSynthesis.speak(u)}catch(e){}}
+function victory(){const t=ac.currentTime+.05;[523,659,784,1047,784,1047,1319].forEach((f,i)=>{tone(f,t+i*.14,.25,'square',.1);tone(f/2,t+i*.14,.25,'triangle',.1)});say('VICTORY!','en-US',1.3,.9)}
+function defeat(){const t=ac.currentTime+.05;[392,370,349,294].forEach((f,i)=>tone(f,t+i*.28,.4,'sawtooth',.1));say('teo tèo teo','vi-VN',1.4,.8)}
+
+/* ---- Trạng thái ---- */
+const bin={x:620,y:230,w:80,h:110};
+const P={x:300,y:380,dir:1,walk:0};
+const dog={x:140,y:360,st:'sleep',t:3};
+let energy=0,drinking=false,over=true,last=0;
+function reset(){P.x=300;P.y=400;energy=0;dog.st='sleep';dog.t=2.5+Math.random()*2;over=false}
+
+function update(dt){
+ let dx=0,dy=0;
+ if(keys.arrowleft||keys.a||keys.bleft)dx--;
+ if(keys.arrowright||keys.d||keys.bright)dx++;
+ if(keys.arrowup||keys.w||keys.bup)dy--;
+ if(keys.arrowdown||keys.s||keys.bdown)dy++;
+ const sp=220;
+ P.x=Math.max(30,Math.min(770,P.x+dx*sp*dt));P.y=Math.max(260,Math.min(470,P.y+dy*sp*dt));
+ if(dx)P.dir=dx;if(dx||dy)P.walk+=dt*12;
+ const near=Math.hypot(P.x-(bin.x+bin.w/2),P.y-(bin.y+bin.h))<110;
+ const want=keys[' ']||holdBtn;
+ drinking=near&&want;
+ if(drinking){energy+=16*dt;if(P.x>bin.x+bin.w/2)P.dir=-1;else P.dir=1}
+ else energy-=10*dt;
+ energy=Math.max(0,Math.min(100,energy));
+ // chó
+ dog.t-=dt;
+ if(dog.t<=0){
+  if(dog.st==='sleep'){dog.st='warn';dog.t=1}
+  else if(dog.st==='warn'){dog.st='watch';dog.t=1.6}
+  else{dog.st='sleep';dog.t=2.5+Math.random()*3}
+ }
+ if(drinking&&dog.st==='watch')return end(false);
+ if(energy>=100)return end(true);
+ fill.style.width=energy+'%';pct.textContent=Math.floor(energy)+'%';
+}
+function end(win){
+ over=true;stopMusic();fill.style.width=energy+'%';pct.textContent=Math.floor(energy)+'%';
+ if(win)victory();else defeat();
+ document.getElementById('t').textContent=win?'🏆 VICTORY!':'🐶 Chó phát hiện rồi! Teo tèo teo...';
+ document.getElementById('d').innerHTML=win?'Nội năng đã đầy, bạn uống sữa thành công!':'Bạn bị bắt quả tang đang uống sữa.';
+ document.getElementById('go').textContent='Chơi lại';ov.style.display='flex';
+}
+
+/* ---- Vẽ ---- */
+function draw(time){
+ g.clearRect(0,0,800,500);
+ // phông xanh + bóng cỏ
+ g.fillStyle='#1fc13a';g.fillRect(0,0,800,500);
+ g.fillStyle='#19a830';for(let i=0;i<40;i++){g.fillRect((i*97)%780,(i*53)%480,6,3)}
+ // chó
+ drawDog();
+ // thùng rác (sau người nếu người ở trên)
+ drawBin();
+ drawPlayer(time);
+ if(drinking){g.fillStyle='#fff';g.font='bold 18px sans-serif';g.textAlign='center';g.fillText('Glug glug...',P.x,P.y-130)}
+ if(dog.st==='warn'){g.fillStyle='#ffeb3b';g.font='bold 44px sans-serif';g.textAlign='center';g.fillText('!',dog.x,dog.y-90)}
+}
+function drawBin(){
+ const {x,y,w,h}=bin;
+ // hộp sữa nhô ra
+ if(!drinking&&energy<100){g.fillStyle='#fff';g.fillRect(x+w/2-12,y-18,24,34);g.fillStyle='#2f80ed';g.fillRect(x+w/2-12,y-6,24,10);g.fillStyle='#fff';g.beginPath();g.moveTo(x+w/2-12,y-18);g.lineTo(x+w/2,y-28);g.lineTo(x+w/2+12,y-18);g.fill()}
+ g.fillStyle='#78909c';g.beginPath();g.moveTo(x,y);g.lineTo(x+w,y);g.lineTo(x+w-10,y+h);g.lineTo(x+10,y+h);g.fill();
+ g.strokeStyle='#546e7a';g.lineWidth=3;for(let i=1;i<4;i++){g.beginPath();g.moveTo(x+i*w/4,y+8);g.lineTo(x+i*w/4-2,y+h-8);g.stroke()}
+ g.fillStyle='#546e7a';g.fillRect(x-8,y-8,w+16,12);g.fillRect(x+w/2-12,y-14,24,8);
+}
+function drawDog(){
+ const {x,y}=dog,awake=dog.st!=='sleep';
+ g.save();g.translate(x,y);
+ g.fillStyle='#b5651d';g.beginPath();g.ellipse(0,0,50,28,0,0,7);g.fill();
+ g.fillRect(-40,18,10,20);g.fillRect(28,18,10,20);
+ g.beginPath();g.arc(48,-14+(awake?-8:6),24,0,7);g.fill();
+ g.fillStyle='#8d4a10';g.beginPath();g.ellipse(36,-22+(awake?-10:6),8,16,awake?-0.1:.5,0,7);g.fill();
+ g.fillStyle='#b5651d';g.fillRect(-60,-12,22,8); // đuôi
+ g.fillStyle='#000';g.beginPath();g.arc(70,-12+(awake?-8:6),5,0,7);g.fill();
+ if(awake){g.fillStyle='#fff';g.beginPath();g.arc(52,-24,7,0,7);g.fill();g.fillStyle=dog.st==='watch'?'#d00':'#000';g.beginPath();g.arc(54,-24,3.5,0,7);g.fill()}
+ else{g.strokeStyle='#000';g.lineWidth=3;g.beginPath();g.moveTo(46,-8);g.lineTo(58,-8);g.stroke();g.fillStyle='#fff';g.font='bold 20px sans-serif';g.fillText('Z z z',60,-50)}
+ if(dog.st==='watch'){g.strokeStyle='#ff1744';g.lineWidth=4;g.beginPath();g.arc(48,-22,36,-0.9,0.9);g.stroke()}
+ g.restore();
+}
+function drawPlayer(t){
+ const {x,y}=P,sw=Math.sin(P.walk)*8;
+ g.save();g.translate(x,y);g.scale(P.dir,1);
+ g.fillStyle='#0003';g.beginPath();g.ellipse(0,0,24,7,0,0,7);g.fill();
+ g.strokeStyle='#263238';g.lineWidth=8;g.lineCap='round';
+ g.beginPath();g.moveTo(-6,-40);g.lineTo(-6+sw,-2);g.moveTo(6,-40);g.lineTo(6-sw,-2);g.stroke();
+ g.fillStyle='#e53935';g.fillRect(-16,-90,32,52);
+ g.strokeStyle='#ffcc80';g.lineWidth=7;g.beginPath();g.moveTo(-14,-84);g.lineTo(-18,-56+sw/2);g.stroke();
+ g.beginPath();g.moveTo(14,-84);
+ if(drinking){g.lineTo(24,-110)}else g.lineTo(18,-56-sw/2);g.stroke();
+ g.fillStyle='#ffcc80';g.beginPath();g.arc(0,-108,18,0,7);g.fill();
+ g.fillStyle='#3e2723';g.beginPath();g.arc(0,-114,18,3.3,6.1);g.fill();
+ g.fillStyle='#000';g.beginPath();g.arc(7,-108,2.5,0,7);g.fill();
+ if(drinking){g.fillStyle='#fff';g.fillRect(14,-130,16,26);g.fillStyle='#2f80ed';g.fillRect(14,-122,16,7);g.strokeStyle='#d33';g.lineWidth=2;g.beginPath();g.moveTo(24,-130);g.lineTo(30,-142);g.stroke()}
+ g.restore();
+}
+function loop(ts){const dt=Math.min(.05,(ts-last)/1000||0);last=ts;if(!over)update(dt);draw(ts);requestAnimationFrame(loop)}
+document.getElementById('go').onclick=()=>{ac=ac||new (window.AudioContext||window.webkitAudioContext)();ac.resume();try{speechSynthesis.cancel()}catch(e){}ov.style.display='none';reset();startMusic()};
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
